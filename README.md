@@ -4,6 +4,9 @@ This is the **voxelizer code** in my slide: [Incarnation - Turning Real World Ob
 
 Voxelizer export [Perfume-World](http://perfume-world.jp) JSON format from `*.OBJ` and `*.MTL`.
 
+![Voxelizer](https://raw.githubusercontent.com/yllan/voxelizer/master/voxelizer.png)
+
+
 ## Usage
 ---
 1. Make sure your *.obj and *.mtl files have the same name. Put it into the same directory as `index.html`.
