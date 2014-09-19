@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - Voxelizer</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				font-family: Monospace;
+				background-color: #000;
+				color: #fff;
+				margin: 0px;
+				overflow: hidden;
+			}
+			#info {
+				color: #fff;
+				position: absolute;
+				top: 10px;
+				width: 100%;
+				text-align: center;
+				z-index: 100;
+				display:block;
+			}
+			#info a, .button { color: #f00; font-weight: bold; text-decoration: underline; cursor: pointer }
+		</style>
+	</head>
+
+	<body>
+		<div id="info">
+		<a href="http://github.com/mrdoob/three.js" target="_blank">three.js</a> - Voxelizer
+		<a href="#" id="save-button">Save</a>
+		</div>
+
+
+		<script src="http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+		<script src="three.min.js"></script>
+		<script src="js/FileSaver.js"></script>
+		<script src="js/loaders/DDSLoader.js"></script>
+		<script src="js/loaders/MTLLoader.js"></script>
+		<script src="js/loaders/OBJMTLLoader.js"></script>
+
+		<script src="js/Detector.js"></script>
+		<script src="js/libs/stats.min.js"></script>
+
+		<script>
+
+			var modelName = 'laocoon';
+			var cubes = [];
+			var voxels = {};
+			var B = 100000000;
+			var minX = B, maxX = -B, minY = B, maxY = -B, minZ = B, maxZ = -B;
+
+			$(document).ready(function () {
+				$('#save-button').hide();
+				$('#save-button').click(function () {
+					var counter = 0;
+					var json = {"version":1, "voxels":[]};
+					var __maxz = -B;
+
+					for (var idx in voxels) {
+						var pos = voxels[idx];
+						if (pos.iz > __maxz) 
+							__maxz = pos.iz;
+					}
+
+					for (var idx in voxels) {
+						var pos = voxels[idx];
+						json["voxels"].push({
+							"x": pos.ix,
+							"y": pos.iy,
+							"z": __maxz - pos.iz,
+							"d": 1,
+							"w": 1,
+							"h": 1,
+							"color": pos.color,
+							"id": counter++
+						});
+					}
+					console.log('done! ' + counter);
+					var blob = new Blob([JSON.stringify(json)], {"type":"application/json;charset=utf-8"});
+					saveAs(blob, modelName + ".json");
+				});
+			});
+
+			var container, stats;
+
+			var camera, scene, renderer;
+
+			var mouseX = 0, mouseY = 0;
+
+			var windowHalfX = window.innerWidth / 2;
+			var windowHalfY = window.innerHeight / 2;
+
+			var golem;
+			var box;
+			var step;
+
+			var ix = 0, iy = 0, iz = 0;
+
+			init();
+			animate();
+			$(window).keydown(function (e) {
+				if (e.which == 65) { // a
+					ix--;
+				} else if (e.which == 70) { // f
+					ix++;
+				} else if (e.which == 83) { // s
+					iz--;
+				} else if (e.which == 68) { // d
+					iz++;
+				} else if (e.which == 87) { // w
+					iy++;
+				} else if (e.which == 88) { // x
+					iy--;
+				}
+				// console.log(ix + ", " + iy + "," + iz);
+				// setBox(ix, iy, iz);
+			});
+
+
+
+
+
+			function intersect(face, position, dimension) {
+				var boxhalfsize = [dimension[0] / 2, dimension[1] / 2, dimension[2] / 2];
+				var boxcenter = [position[0] + boxhalfsize[0], position[1] + boxhalfsize[1], position[2] + boxhalfsize[2]];
+				var triverts = [[face[0].x, face[0].y, face[0].z], 
+								[face[1].x, face[1].y, face[1].z],
+								[face[2].x, face[2].y, face[2].z]];
+				// return triBoxOverlap(boxcenter, boxhalfsize, triverts);
+				return true;
+			}
+
+			function init() {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 2000 );
+				camera.position.x = 40;
+				camera.position.z = -20;
+
+				// scene
+
+				scene = new THREE.Scene();
+
+				var ambient = new THREE.AmbientLight( 0x404040 );
+				scene.add( ambient );
+
+				var directionalLight = new THREE.DirectionalLight( 0xffeedd );
+				directionalLight.position.set( 0, 0, -1 ).normalize();
+				scene.add( directionalLight );
+
+				renderer = new THREE.WebGLRenderer();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				container.appendChild( renderer.domElement );
+
+				document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+				window.addEventListener( 'resize', onWindowResize, false );
+
+				// model
+
+				var loader = new THREE.OBJMTLLoader();
+				loader.load(modelName + '.obj', modelName + '.mtl', function ( object ) {
+					
+					scene.remove(golem);
+					for (var idx = cubes.length - 1; idx >= 0; idx--) {
+						scene.remove(cubes[idx]);
+					}
+
+					if (object instanceof THREE.Object3D) {
+						golem = object;
+					}
+					cubes = [];
+					voxels = {};
+
+					if (golem instanceof THREE.Object3D)
+					{
+					    golem.traverse (function (mesh)
+					    {
+					        if (mesh instanceof THREE.Mesh)
+					        {
+					            mesh.geometry.computeBoundingBox ();
+					            var bBox = mesh.geometry.boundingBox;
+
+					            // compute overall bbox
+					            minX = Math.min (minX, bBox.min.x);
+					            minY = Math.min (minY, bBox.min.y);
+					            minZ = Math.min (minZ, bBox.min.z);
+					            maxX = Math.max (maxX, bBox.max.x);
+					            maxY = Math.max (maxY, bBox.max.y);
+					            maxZ = Math.max (maxZ, bBox.max.z);
+					        }
+					    });
+
+    					step = 0;
+						var w = maxX - minX;
+						var d = maxZ - minZ;
+						var h = maxY - minY;
+						if (w * 60 / 80 < d) {
+							step = d / 60;
+						} else {
+							step = w / 80;
+						}
+						step = 0.4;
+						console.log("step: " + step);
+
+					    golem.traverse(function(mesh)
+					    {
+					    	if (mesh instanceof THREE.Mesh)
+					    	{
+					    		var v = mesh.geometry.vertices;
+				            	var uvs;
+				            	var ctx;
+				            	var texture;
+				            	var textureImg;
+								if (mesh.geometry.faceVertexUvs) {
+				            		uvs = mesh.geometry.faceVertexUvs[0];
+				            	}
+				            	console.log(mesh.material.map);
+				            	if (mesh.material && mesh.material.map && mesh.material.map.image) {
+
+				            		texture = document.createElement('canvas');
+				            		textureImg = mesh.material.map.image;
+				            		console.log("image: " + mesh.material.map.image.src);
+				            		texture.width = textureImg.width;
+				            		texture.height = textureImg.height;
+
+				            		// TODO: test mesh.material.map.flipY 
+				            		ctx = texture.getContext('2d');
+				            		ctx.drawImage(textureImg, 0, 0, textureImg.width, textureImg.height);
+				            		//mesh.geometry.map.image;
+				            	}
+
+
+					    		for (var i = mesh.geometry.faces.length - 1; i >= 0; i--) {
+					            	var f = mesh.geometry.faces[i];
+					            	var localMinX = Math.min(v[f.a].x, v[f.b].x, v[f.c].x);
+					            	var localMaxX = Math.max(v[f.a].x, v[f.b].x, v[f.c].x);
+					            	var localMinY = Math.min(v[f.a].y, v[f.b].y, v[f.c].y);
+					            	var localMaxY = Math.max(v[f.a].y, v[f.b].y, v[f.c].y);
+					            	var localMinZ = Math.min(v[f.a].z, v[f.b].z, v[f.c].z);
+					            	var localMaxZ = Math.max(v[f.a].z, v[f.b].z, v[f.c].z);
+
+					            	var x_start = Math.floor((localMinX - minX) / step);
+					            	var x_end = Math.ceil((localMaxX - minX) / step);
+					            	var y_start = Math.floor((localMinY - minY) / step);
+					            	var y_end = Math.ceil((localMaxY - minY) / step);
+					            	var z_start = Math.floor((localMinZ - minZ) / step);
+					            	var z_end = Math.ceil((localMaxZ - minZ) / step);
+
+					            	for (var x = x_start; x < x_end; x++) {
+					            		for (var y = y_start; y < y_end; y++) {
+					            			for (var z = z_start; z < z_end; z++) {
+					            				var idx = x + "_" + y + "_" + z;
+					            				if (voxels[idx]) continue;
+					            				// if (intersect([v[f.a], v[f.b], v[f.c]], 
+					            				// 			  [minX + x * step, minY + y * step, minZ + z * step], 
+					            				// 			  [step, step, step])) 
+					            				// {
+					            				var color = 0xffff00;
+					            				if (uvs && texture) {
+					            					var uv = uvs[i]; // [{x, y}, {x, y}, {x, y}]
+					            					var yt = uv[0].y;
+					            					if (mesh.material.map.flipY)
+					            						yt = 1 - yt;
+					            					var components = ctx.getImageData(uv[0].x * texture.width, yt * texture.height, 1, 1).data;
+					            					color = 0x10000 * components[0] + 0x100 * components[1] + components[2];
+					            					// test mesh.material.map;.flipY
+					            				}
+					            					var m = mesh.material.map.image;
+					            					var uvs = mesh.geometry.faceVertexUvs[0];
+					            					voxels[idx] = {"x": minX + x * step, "y": minY + y * step, "z": minZ + z * step, "color": color, "ix":x, "iy":y, "iz":z};
+					            				// }
+					            			}
+					            		}
+					            	}
+					            }
+
+					    	}
+					    });
+						scene.add(golem);
+						render();
+
+
+						var __minx = B, __miny = B, __minz = B, __maxx = -B, __maxy = -B, __maxz = -B;
+
+						for (var idx in voxels) {
+							var pos = voxels[idx];
+							var cubeGeometry = new THREE.BoxGeometry(step, step, step);
+							var wireMaterial = new THREE.MeshBasicMaterial( { color: voxels[idx].color, wireframe: false } );
+							voxel = new THREE.Mesh( cubeGeometry, wireMaterial );
+							voxel.position.set(pos.x, pos.y, pos.z);
+							cubes.push(voxel);
+							scene.add(voxel);
+							
+							if (pos.ix < __minx) __minx = pos.ix;
+							if (pos.ix > __maxx) __maxx = pos.ix;
+							if (pos.iy < __miny) __miny = pos.iy;
+							if (pos.iy > __maxy) __maxy = pos.iy;
+							if (pos.iz < __minz) __minz = pos.iz;
+							if (pos.iz > __maxz) __maxz = pos.iz;
+						}
+
+						$('#save-button').show();						
+					}
+				});
+
+			}
+
+			function onWindowResize() {
+
+				windowHalfX = window.innerWidth / 2;
+				windowHalfY = window.innerHeight / 2;
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function onDocumentMouseMove( event ) {
+
+				mouseX = ( event.clientX - windowHalfX ) / 2;
+				mouseY = ( event.clientY - windowHalfY ) / 2;
+
+			}
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				render();
+
+			}
+			
+			function setBox(x, y, z) {
+				box.position.set(minX + x * step, minY + y * step, minZ + z * step);
+				var originPoint = box.position.clone();
+
+				var hit;
+				hit = false;
+				for (var vertexIndex = 0; vertexIndex < box.geometry.vertices.length; vertexIndex++)
+				{
+					var localVertex = box.geometry.vertices[vertexIndex].clone();
+					var globalVertex = localVertex.applyMatrix4( box.matrix );
+					var directionVector = globalVertex.sub( originPoint );
+					
+					var ray = new THREE.Raycaster( originPoint, directionVector.clone().normalize() );
+					
+					var collisionResults = ray.intersectObjects( golem.children, true );
+					if ( collisionResults.length > 0
+						&& collisionResults[0].distance < directionVector.length() ) {
+						hit = true;
+						break;
+					}
+					
+				}
+				if (hit) {
+					console.log("hit " + x + ", " + y + ", "  + z);
+					// box.color
+					box.material = new THREE.MeshBasicMaterial( { color: 0xff0000, wireframe:true } );
+				} else {
+					box.material = new THREE.MeshBasicMaterial( { color: 0x00ff00, wireframe:true } );
+				}
+			}
+
+			function render() {
+				// if (minX + ix * step > maxX) {
+				// 	ix = 0;
+				// 	iz++;
+				// }
+				// if (minZ + iz * step > maxZ) {
+				// 	ix = 0;
+				// 	iz = 0;
+				// 	iy++;
+				// }
+				// if (minY + iy * step > maxY) {
+				// 	ix = 0;
+				// 	iy = 0;
+				// 	iz = 0;
+				// }
+				// setBox(ix, iy, iz);
+				// ix++;
+
+				camera.position.x += ( mouseX - camera.position.x ) * .05;
+				camera.position.y += ( - mouseY - camera.position.y ) * .05;
+
+				camera.lookAt( scene.position );
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+
+	</body>
+</html>
